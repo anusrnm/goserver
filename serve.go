@@ -2,20 +2,17 @@ package main
 
 import (
 	"context"
+	"embed"
 	"flag"
 	"fmt"
 	"io"
 	"log"
-	"mime"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"path"
 	"path/filepath"
-	"strings"
 	"syscall"
-	"text/template"
 	"time"
 )
 
@@ -24,15 +21,15 @@ import (
 // to reduce binary size:
 //go build -ldflags="-s -w"
 
+//go:embed static/*
+var staticFiles embed.FS
+
 var port string
-var root string
 var uploadDir string
 // var showIp bool
 
 func init() {
-
 	flag.StringVar(&port, "p", "5000", "port to listen")
-	flag.StringVar(&root, "root", "static", "file system path")
 	flag.StringVar(&uploadDir, "ud", ".", "where to store the uploads")
 	flag.Parse()
 }
@@ -48,7 +45,7 @@ func getOutboundIP() net.IP {
 }
 
 type MyHandlers struct {
-	Root string
+	UploadDir string
 }
 
 func ping(w http.ResponseWriter, r *http.Request) {
@@ -112,11 +109,11 @@ func serve(w http.ResponseWriter, r *http.Request) {
 
 func (params *MyHandlers) uploader(w http.ResponseWriter, r *http.Request) {
 	log.Println(r.RemoteAddr, r.Method, r.URL.Path)
-	if r.Method == "GET" {
-		t, _ := template.ParseFiles(filepath.Join(params.Root, "upload.gtpl"))
-		t.Execute(w, nil)
-		return
-	}
+
+	if r.Method != http.MethodPost {
+        http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+        return
+    }
 	reader, err := r.MultipartReader()
 	if err != nil {
 		http.Error(w, "Processing error", http.StatusInternalServerError)
@@ -135,7 +132,7 @@ func (params *MyHandlers) uploader(w http.ResponseWriter, r *http.Request) {
 			log.Println("FileName is empty")
 			continue
 		}
-		fullFileName := filepath.Join(uploadDir, part.FileName())
+		fullFileName := filepath.Join(params.UploadDir, part.FileName())
 		dst, err := os.Create(fullFileName)
 		if err != nil {
 			http.Error(w, "Processing error", http.StatusInternalServerError)
@@ -157,38 +154,31 @@ func (params *MyHandlers) uploader(w http.ResponseWriter, r *http.Request) {
 
 }
 
-func (params *MyHandlers) MyFileServer(w http.ResponseWriter, r *http.Request) {
-	log.Println(r.RemoteAddr, r.Method, r.URL.Path)
-	w.Header().Add("Cache-Control", "no-cache")
-	contentType := mime.TypeByExtension(path.Ext(r.URL.Path))
-	if contentType == "" {
-        contentType = "text/html" // Default for unknown types
-    }
-	if strings.HasSuffix(r.URL.Path, ".wasm") {
-		contentType = "application/wasm"
+// serveIndex serves the index.html file for the root URL
+func serveIndex(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/" {
+		// Serve the index.html file
+		data, err := staticFiles.ReadFile("static/index.html")
+		if err != nil {
+			http.Error(w, "File not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		w.Write(data)
+		return
 	}
-	w.Header().Set("Content-type", contentType)
-	log.Println("Response Headers:")
-    for name, values := range w.Header() {
-        for _, value := range values {
-            log.Printf("%s: %s\n", name, value)
-        }
-    }
-	p := "." + r.URL.Path
-	if p == "./" {
-		p = "index.html"
-	}
-	p = path.Join(params.Root, p)
-	http.ServeFile(w, r, p)
+
+	// Serve other static files
+	http.FileServer(http.FS(staticFiles)).ServeHTTP(w, r)
 }
 
 func main() {
 	stopChan := make(chan os.Signal, 1)
 	signal.Notify(stopChan, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
-	handlersWithParam := &MyHandlers{Root: root}
+	handlersWithParam := &MyHandlers{UploadDir: uploadDir}
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/", handlersWithParam.MyFileServer)
+	mux.HandleFunc("/", serveIndex)
 	mux.HandleFunc("/ping", ping)
 	mux.HandleFunc("/upload", handlersWithParam.uploader)
 	// mux.HandleFunc("/download", handlersWithParam.download)
@@ -206,7 +196,7 @@ func main() {
 	if err != nil {
 		hostname = ""
 	}
-	log.Printf("Server running @ http://%s%s http://%s%s Root: %s", hostname, srv.Addr, getOutboundIP(), srv.Addr, root)
+	log.Printf("Server running @ http://%s%s http://%s%s. UploadDir: %s", hostname, srv.Addr, getOutboundIP(), srv.Addr, uploadDir)
 	<-stopChan //wait for SIGINT
 	log.Println("Shutting down server...")
 
