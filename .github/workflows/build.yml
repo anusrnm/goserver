@@ -25,8 +25,11 @@ jobs:
     - name: Build
       run: go build -v ./...
 
+    - name: List files
+      run: dir  # For Windows
+      
     - name: Upload .exe file
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v4
       with:
         name: goserver
         path: goserver.exe
