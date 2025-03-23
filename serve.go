@@ -186,7 +186,7 @@ func main() {
 
 	srv := &http.Server{Addr: fmt.Sprintf(":%s", port), Handler: mux}
 	go func() {
-		if err := srv.ListenAndServe(); err != nil {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("Listen error: %s\n", err)
 			stopChan <- os.Interrupt
 		}
