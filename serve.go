@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -120,38 +123,56 @@ func (params *MyHandlers) uploader(w http.ResponseWriter, r *http.Request) {
 		log.Print(err.Error())
 		return
 	}
+	// Ensure upload directory exists
+	if err := os.MkdirAll(params.UploadDir, 0755); err != nil {
+		http.Error(w, "Unable to create upload directory", http.StatusInternalServerError)
+		log.Print(err.Error())
+		return
+	}
+	var wg sync.WaitGroup
+	var mu sync.Mutex
 	fileCount := 0
+	results := []string{}
+	parts := []*multipart.Part{}
+	// Collect all parts first
 	for {
 		part, err := reader.NextPart()
 		if err == io.EOF {
-			log.Println("Reached EOF")
 			break
 		}
-		//if FileName is empty, skip this iteration.
 		if part.FileName() == "" {
-			log.Println("FileName is empty")
 			continue
 		}
-		fullFileName := filepath.Join(params.UploadDir, part.FileName())
-		dst, err := os.Create(fullFileName)
-		if err != nil {
-			http.Error(w, "Processing error", http.StatusInternalServerError)
-			log.Print(err.Error())
-			return
-		}
-		defer dst.Close()
-
-		if _, err := io.Copy(dst, part); err != nil {
-			http.Error(w, "Unable to Upload", http.StatusInternalServerError)
-			log.Print(err.Error())
-			return
-		}
-		fileCount++
-		log.Printf("Saved %d %s", fileCount, fullFileName)
+		parts = append(parts, part)
 	}
-	fmt.Fprintf(w, "Uploaded %d file(s)", fileCount)
+	for _, part := range parts {
+		wg.Add(1)
+		go func(p *multipart.Part) {
+			defer wg.Done()
+			fullFileName := filepath.Join(params.UploadDir, p.FileName())
+			dst, err := os.Create(fullFileName)
+			if err != nil {
+				mu.Lock()
+				results = append(results, p.FileName()+": error saving file")
+				mu.Unlock()
+				return
+			}
+			defer dst.Close()
+			if _, err := io.Copy(dst, p); err != nil {
+				mu.Lock()
+				results = append(results, p.FileName()+": error writing file")
+				mu.Unlock()
+				return
+			}
+			mu.Lock()
+			fileCount++
+			results = append(results, p.FileName()+": uploaded")
+			mu.Unlock()
+		}(part)
+	}
+	wg.Wait()
+	fmt.Fprintf(w, "Uploaded %d file(s)\n%s", fileCount, strings.Join(results, "\n"))
 	log.Printf("Saved %d file(s)", fileCount)
-
 }
 
 // serveIndex serves the index.html file for the root URL

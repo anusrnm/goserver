@@ -12,35 +12,47 @@
         body {
             margin: 20px;
         }
+
+        #dropArea {
+            height: 220px;
+            border-style: dashed;
+            cursor: pointer;
+        }
     </style>
 </head>
 
 <body>
     <div class="container">
-        <div class="mb-4">
-            <h2>Upload Files</h2>
-            <form id="uploadForm" enctype="multipart/form-data">
-                <div class="mb-3">
-                    <input type="file" id="fileInput" name="files" class="form-control" multiple />
-                </div>
-                <button type="button" class="btn btn-info" onclick="uploadFiles()">Upload</button>
-            </form>
-            <p id="uploadResponse" class="mt-2"></p>
-        </div>
-        
-        <div class="mb-4">
-            <h2>Send GET Request</h2>
-            <button class="btn btn-primary" onclick="sendGetRequest()">Ping</button>
-            <p id="getResponse" class="mt-2"></p>
-        </div>
-
-        <div class="mb-4">
-            <h2>Send POST Request</h2>
-            <div class="mb-3">
-                <textarea id="postText" class="form-control" placeholder="Enter text to log..."></textarea>
+        <ul class="nav nav-tabs" id="mainTab" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="upload-tab" data-bs-toggle="tab" data-bs-target="#upload" type="button" role="tab" aria-controls="upload" aria-selected="true">Upload Files</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="post-tab" data-bs-toggle="tab" data-bs-target="#post" type="button" role="tab" aria-controls="post" aria-selected="false">Send POST Request</button>
+            </li>
+        </ul>
+        <div class="tab-content mt-3" id="mainTabContent">
+            <div class="tab-pane fade show active" id="upload" role="tabpanel" aria-labelledby="upload-tab">
+                <form id="uploadForm" enctype="multipart/form-data" onsubmit="return false;">
+                    <div id="dropArea" class="mb-3 border border-primary rounded bg-dark bg-opacity-25 d-flex flex-column justify-content-center align-items-center">
+                        <div class="text-center text-secondary">
+                            <span style="font-size: 2rem;">📂</span><br>
+                            <span>Drag & Drop files here or click to select</span>
+                        </div>
+                        <input type="file" id="fileInput" name="files" class="form-control" multiple style="display:none;" onchange="listFiles()" />
+                    </div>
+                    <div id="fileList" class="mb-3"></div>
+                    <button type="button" class="btn btn-info" onclick="uploadFiles()">Upload</button>
+                </form>
+                <p id="uploadResponse" class="mt-2"></p>
             </div>
-            <button class="btn btn-success" onclick="sendPostRequest()">Send</button>
-            <p id="postResponse" class="mt-2"></p>
+            <div class="tab-pane fade" id="post" role="tabpanel" aria-labelledby="post-tab">
+                <div class="mb-3">
+                    <textarea id="postText" class="form-control" placeholder="Enter text to log..." style="min-height: 120px;"></textarea>
+                </div>
+                <button class="btn btn-success" onclick="sendPostRequest()">Send</button>
+                <p id="postResponse" class="mt-2"></p>
+            </div>
         </div>
     </div>
 
@@ -74,18 +86,88 @@
                 });
         }
 
+        function listFiles() {
+            const fileInput = document.getElementById('fileInput');
+            const fileList = document.getElementById('fileList');
+            fileList.innerHTML = '';
+            Array.from(fileInput.files).forEach((file, idx) => {
+                const fileDiv = document.createElement('div');
+                fileDiv.className = 'mb-2';
+                fileDiv.innerHTML = `
+                    <strong>${file.name}</strong> (${(file.size/1024).toFixed(2)} KB, ${file.type || 'n/a'})
+                    <div class="progress mt-1" style="height: 20px;">
+                        <div id="progress-${idx}" class="progress-bar" role="progressbar" style="width: 0%">0%</div>
+                    </div>
+                `;
+                fileList.appendChild(fileDiv);
+            });
+        }
+
         function uploadFiles() {
-            const formData = new FormData(document.getElementById('uploadForm'));
-            fetch('/upload', {
-                method: 'POST',
-                body: formData,
-            })
-            .then(response => response.text())
-            .then(data => {
-                document.getElementById('uploadResponse').innerText = data;
-            })
-            .catch(error => {
-                console.error('Error:', error);
+            const fileInput = document.getElementById('fileInput');
+            const files = fileInput.files;
+            if (!files.length) return;
+
+            document.getElementById('uploadResponse').innerText = '';
+            Array.from(files).forEach((file, idx) => {
+                const formData = new FormData();
+                formData.append('files', file);
+
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', '/upload', true);
+
+                xhr.upload.onprogress = function(e) {
+                    if (e.lengthComputable) {
+                        const percent = Math.round((e.loaded / e.total) * 100);
+                        const progressBar = document.getElementById(`progress-${idx}`);
+                        if (progressBar) {
+                            progressBar.style.width = percent + '%';
+                            progressBar.innerText = percent + '%';
+                        }
+                    }
+                };
+
+                xhr.onload = function() {
+                    const progressBar = document.getElementById(`progress-${idx}`);
+                    if (xhr.status === 200) {
+                        if (progressBar) {
+                            progressBar.classList.add('bg-success');
+                            progressBar.innerText = 'Uploaded';
+                        }
+                    } else {
+                        if (progressBar) {
+                            progressBar.classList.add('bg-danger');
+                            progressBar.innerText = 'Error';
+                        }
+                    }
+                };
+
+                xhr.send(formData);
+            });
+        }
+
+        // Drag and drop area logic
+        const dropArea = document.getElementById('dropArea');
+        const fileInput = document.getElementById('fileInput');
+        if (dropArea && fileInput) {
+            dropArea.addEventListener('click', () => fileInput.click());
+            dropArea.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropArea.classList.add('border-info');
+                dropArea.classList.add('bg-primary', 'bg-opacity-10');
+            });
+            dropArea.addEventListener('dragleave', (e) => {
+                e.preventDefault();
+                dropArea.classList.remove('border-info');
+                dropArea.classList.remove('bg-primary', 'bg-opacity-10');
+            });
+            dropArea.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropArea.classList.remove('border-info');
+                dropArea.classList.remove('bg-primary', 'bg-opacity-10');
+                const files = e.dataTransfer.files;
+                fileInput.files = files;
+                listFiles();
             });
         }
     </script>
