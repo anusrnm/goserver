@@ -7,14 +7,12 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"mime/multipart"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 )
@@ -129,12 +127,8 @@ func (params *MyHandlers) uploader(w http.ResponseWriter, r *http.Request) {
 		log.Print(err.Error())
 		return
 	}
-	var wg sync.WaitGroup
-	var mu sync.Mutex
 	fileCount := 0
 	results := []string{}
-	parts := []*multipart.Part{}
-	// Collect all parts first
 	for {
 		part, err := reader.NextPart()
 		if err == io.EOF {
@@ -143,34 +137,21 @@ func (params *MyHandlers) uploader(w http.ResponseWriter, r *http.Request) {
 		if part.FileName() == "" {
 			continue
 		}
-		parts = append(parts, part)
+		fullFileName := filepath.Join(params.UploadDir, part.FileName())
+		dst, err := os.Create(fullFileName)
+		if err != nil {
+			results = append(results, part.FileName()+": error saving file")
+			continue
+		}
+		_, err = io.Copy(dst, part)
+		dst.Close()
+		if err != nil {
+			results = append(results, part.FileName()+": error writing file")
+			continue
+		}
+		fileCount++
+		results = append(results, part.FileName()+": uploaded")
 	}
-	for _, part := range parts {
-		wg.Add(1)
-		go func(p *multipart.Part) {
-			defer wg.Done()
-			fullFileName := filepath.Join(params.UploadDir, p.FileName())
-			dst, err := os.Create(fullFileName)
-			if err != nil {
-				mu.Lock()
-				results = append(results, p.FileName()+": error saving file")
-				mu.Unlock()
-				return
-			}
-			defer dst.Close()
-			if _, err := io.Copy(dst, p); err != nil {
-				mu.Lock()
-				results = append(results, p.FileName()+": error writing file")
-				mu.Unlock()
-				return
-			}
-			mu.Lock()
-			fileCount++
-			results = append(results, p.FileName()+": uploaded")
-			mu.Unlock()
-		}(part)
-	}
-	wg.Wait()
 	fmt.Fprintf(w, "Uploaded %d file(s)\n%s", fileCount, strings.Join(results, "\n"))
 	log.Printf("Saved %d file(s)", fileCount)
 }
